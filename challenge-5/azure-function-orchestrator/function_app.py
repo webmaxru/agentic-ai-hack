@@ -76,24 +76,38 @@ async def process_claim_http(req: func.HttpRequest) -> func.HttpResponse:
                     mimetype="application/json"
                 )
         
-        # Validate required parameters
-        if not claim_details:
+        # Validate required parameters - prioritize claim_id for database processing
+        if not claim_id and not claim_details:
             return func.HttpResponse(
                 json.dumps({
                     "status": "error",
-                    "error_message": "claim_details parameter is required"
+                    "error_message": "Either claim_id or claim_details parameter is required"
                 }),
                 status_code=400,
                 mimetype="application/json"
             )
         
-        logger.info(f"Processing claim: {claim_details[:100]}{'...' if len(claim_details) > 100 else ''}")
-        if claim_id:
-            logger.info(f"Claim ID: {claim_id}")
+        # If no claim_id provided, return list of available claim IDs
+        if not claim_id:
+            return func.HttpResponse(
+                json.dumps({
+                    "status": "info",
+                    "message": "This orchestrator processes claims by ID from the database. Use one of these available claim IDs:",
+                    "available_claim_ids": ["CL001", "CL002", "CL003", "CL004"],
+                    "example_usage": "?claim_id=CL001",
+                    "claim_details_provided": claim_details[:100] + "..." if len(claim_details) > 100 else claim_details
+                }),
+                status_code=200,
+                mimetype="application/json"
+            )
+        
+        logger.info(f"Processing Claim ID: {claim_id}")
+        if claim_details:
+            logger.info(f"Additional context provided: {claim_details[:100]}{'...' if len(claim_details) > 100 else ''}")
         
         # Get orchestrator and process claim
         orchestrator = await get_orchestrator()
-        result = await orchestrator.process_claim(claim_details, claim_id)
+        result = await orchestrator.process_claim(claim_id)
         
         # Return success response
         return func.HttpResponse(

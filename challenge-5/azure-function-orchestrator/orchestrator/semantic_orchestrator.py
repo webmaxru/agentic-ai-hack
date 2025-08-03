@@ -8,7 +8,7 @@ import os
 import logging
 from typing import Dict, Any, Optional
 from datetime import timedelta
-from azure.identity.aio import DefaultAzureCredential
+from azure.identity.aio import DefaultAzureCredential, ClientSecretCredential
 from semantic_kernel.agents import (
     AzureAIAgent, 
     ConcurrentOrchestration
@@ -56,12 +56,29 @@ class InsuranceClaimOrchestrator:
         endpoint = os.environ.get("AI_FOUNDRY_PROJECT_ENDPOINT")
         model_deployment = os.environ.get("MODEL_DEPLOYMENT_NAME", "gpt-4.1-mini")
         
+        # Get authentication details
+        client_id = os.environ.get("AZURE_CLIENT_ID")
+        client_secret = os.environ.get("AZURE_CLIENT_SECRET")
+        tenant_id = os.environ.get("AZURE_TENANT_ID")
+        
         if not endpoint:
             raise ValueError("AI_FOUNDRY_PROJECT_ENDPOINT environment variable is required")
         
         agents = {}
         
-        async with DefaultAzureCredential() as creds:
+        # Use service principal credentials if available, otherwise fall back to default
+        if client_id and client_secret and tenant_id:
+            logger.info("🔐 Using service principal authentication...")
+            creds = ClientSecretCredential(
+                tenant_id=tenant_id,
+                client_id=client_id,
+                client_secret=client_secret
+            )
+        else:
+            logger.info("🔐 Using default Azure credentials...")
+            creds = DefaultAzureCredential()
+        
+        async with creds:
             client = AzureAIAgent.create_client(credential=creds, endpoint=endpoint)
             
             # Create Claim Reviewer Agent with Cosmos DB access
@@ -203,13 +220,12 @@ Provide professional, accurate, and thorough policy analysis."""
             logger.info("✅ All specialized agents created successfully!")
             return agents, client
 
-    async def process_claim(self, claim_details: str, claim_id: Optional[str] = None) -> Dict[str, Any]:
+    async def process_claim(self, claim_id: str) -> Dict[str, Any]:
         """
-        Orchestrate multiple agents to process an insurance claim concurrently.
+        Orchestrate multiple agents to process an insurance claim concurrently using only the claim ID.
         
         Args:
-            claim_details: Description of the claim to analyze
-            claim_id: Optional claim ID for database lookup
+            claim_id: The claim ID for database lookup and analysis
             
         Returns:
             Dict containing the analysis results from all agents
@@ -219,6 +235,7 @@ Provide professional, accurate, and thorough policy analysis."""
             raise RuntimeError("Orchestrator not initialized. Call initialize() first.")
         
         logger.info(f"🚀 Starting Concurrent Insurance Claim Processing Orchestration")
+        logger.info(f"🔍 Processing Claim ID: {claim_id}")
         
         try:
             # Create concurrent orchestration with all three agents
@@ -228,44 +245,42 @@ Provide professional, accurate, and thorough policy analysis."""
             
             logger.info(f"🎯 Processing insurance claim with all agents working simultaneously")
             
-            # Create specialized tasks for each agent
-            base_task = f"""Analyze this insurance claim from your specialized perspective:
+            # Create task that instructs agents to retrieve claim details first
+            task = f"""Analyze the insurance claim with ID: {claim_id}
 
-CLAIM DETAILS: {claim_details}"""
-            
-            if claim_id:
-                base_task += f"\nCLAIM ID: {claim_id} (Use this to retrieve detailed claim data from Cosmos DB)"
-            
-            task = f"""{base_task}
+INSTRUCTIONS FOR ALL AGENTS:
+1. First, use the get_document_by_claim_id() function to retrieve the complete claim details for claim ID: {claim_id}
+2. Then analyze the retrieved claim data from your specialized perspective
 
 AGENT-SPECIFIC INSTRUCTIONS:
 
 Claim Reviewer Agent: 
-- If claim_id is provided, use get_document_by_claim_id() to retrieve full claim details
+- Retrieve claim details using get_document_by_claim_id("{claim_id}")
 - Review all claim documentation and assess completeness
 - Validate damage estimates and repair costs
 - Check for proper evidence and documentation
 - Provide VALID/QUESTIONABLE/INVALID determination
 
 Risk Analyzer Agent:
-- If claim_id is provided, use get_document_by_claim_id() to retrieve claim data
+- Retrieve claim data using get_document_by_claim_id("{claim_id}")
 - Analyze for fraud indicators and suspicious patterns
 - Assess claim authenticity and credibility
 - Check for unusual timing, amounts, or circumstances
 - Provide LOW/MEDIUM/HIGH risk assessment
 
 Policy Checker Agent:
+- Retrieve claim details using get_document_by_claim_id("{claim_id}") if needed for context
 - Analyze policy coverage for this type of claim
 - Determine if claim is covered under policy terms
 - Identify relevant exclusions, limits, or deductibles
 - Provide COVERED/NOT COVERED/PARTIAL COVERAGE determination
 - Reference specific policy sections
 
-Each agent should provide comprehensive analysis from your area of expertise."""
+Each agent should provide comprehensive analysis from your area of expertise based on the retrieved claim data."""
             
             logger.info(f"📋 Task assigned to all agents:")
-            logger.info(f"   • Claim Reviewer: Validate claim documentation and assess completeness")
-            logger.info(f"   • Risk Analyzer: Assess fraud risk and authenticity")
+            logger.info(f"   • Claim Reviewer: Retrieve and validate claim documentation")
+            logger.info(f"   • Risk Analyzer: Retrieve and assess fraud risk")
             logger.info(f"   • Policy Checker: Determine coverage eligibility")
             
             # Invoke concurrent orchestration
@@ -298,8 +313,7 @@ Each agent should provide comprehensive analysis from your area of expertise."""
             comprehensive_analysis = f"""# 🏢 Insurance Claim Analysis Report
 
 ## 📋 Claim Information
-{claim_details}
-{f"**Claim ID:** {claim_id}" if claim_id else ""}
+**Claim ID:** {claim_id}
 
 ## 🔍 Multi-Agent Concurrent Analysis Results
 
@@ -318,11 +332,11 @@ Based on the comprehensive concurrent analysis from our specialized AI agents:
 ---
 *Generated through concurrent multi-agent orchestration using Azure AI Agent Service and Semantic Kernel*
 *Analysis completed simultaneously by specialized insurance processing agents*
+*Claim data automatically retrieved from Cosmos DB using Claim ID: {claim_id}*
 """
             
             formatted_results = {
                 "status": "success",
-                "claim_details": claim_details,
                 "claim_id": claim_id,
                 "agent_analyses": agent_analyses,
                 "comprehensive_analysis": comprehensive_analysis,
@@ -337,7 +351,6 @@ Based on the comprehensive concurrent analysis from our specialized AI agents:
             return {
                 "status": "error",
                 "error_message": str(e),
-                "claim_details": claim_details,
                 "claim_id": claim_id
             }
 
